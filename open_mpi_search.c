@@ -5,7 +5,7 @@
 
 #define MAX_STRING_LENGTH 1024
 
-
+// Function to load strings (patterns) from a file
 char** load_strings(const char* filename, int* count, int* max_pattern_length) {
     FILE* file = fopen(filename, "r");
     if (!file) {
@@ -37,31 +37,115 @@ char** load_strings(const char* filename, int* count, int* max_pattern_length) {
     return strings;
 }
 
-int is_continuous_file(const char* filename) {
-    FILE* file = fopen(filename, "r");
-    if (!file) {
-        fprintf(stderr, "Error: Could not open file %s\n", filename);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+// Function to search for a pattern in multiple directions (forwards and backwards)
+void search_in_matrix(char** matrix, int rows, int cols, const char* pattern, int pattern_length, int rank) {
+    // Search horizontally (left to right) in each row
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j <= cols - pattern_length; j++) {
+            if (strncmp(&matrix[i][j], pattern, pattern_length) == 0) {
+                printf("Process %d found '%s' horizontally (forward) at position (%d, %d)\n", rank, pattern, i, j);
+            }
+        }
 
-    int continuous = 1;
-    char ch;
-    while ((ch = fgetc(file)) != EOF) {
-        if (ch == ' ' || ch == '\n') {
-            continuous = 0;
-            break;
+        // Search horizontally (right to left) in each row
+        for (int j = cols - 1; j >= pattern_length - 1; j--) {
+            if (strncmp(&matrix[i][j - pattern_length + 1], pattern, pattern_length) == 0) {
+                printf("Process %d found '%s' horizontally (backward) at position (%d, %d)\n", rank, pattern, i, j - pattern_length + 1);
+            }
         }
     }
 
-    fclose(file);
-    return continuous;
-}
+    // Search vertically (top to bottom) in each column
+    for (int j = 0; j < cols; j++) {
+        for (int i = 0; i <= rows - pattern_length; i++) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i + k][j] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' vertically (forward) at position (%d, %d)\n", rank, pattern, i, j);
+            }
+        }
 
-void quick_search(const char* text, long text_length, const char* pattern, int pattern_length, long start_offset, int rank) {
-    for (long i = 0; i <= text_length - pattern_length; i++) {
-        if (strncmp(&text[i], pattern, pattern_length) == 0) {
-            long global_position = start_offset + i;
-            printf("Process %d found '%s' at position %ld\n", rank, pattern, global_position);
+        // Search vertically (bottom to top) in each column
+        for (int i = rows - 1; i >= pattern_length - 1; i--) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i - k][j] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' vertically (backward) at position (%d, %d)\n", rank, pattern, i - pattern_length + 1, j);
+            }
+        }
+    }
+
+    // Search diagonally (top-left to bottom-right)
+    for (int i = 0; i <= rows - pattern_length; i++) {
+        for (int j = 0; j <= cols - pattern_length; j++) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i + k][j + k] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' diagonally (TL to BR) at position (%d, %d)\n", rank, pattern, i, j);
+            }
+        }
+    }
+
+    // Search diagonally (top-right to bottom-left)
+    for (int i = 0; i <= rows - pattern_length; i++) {
+        for (int j = pattern_length - 1; j < cols; j++) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i + k][j - k] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' diagonally (TR to BL) at position (%d, %d)\n", rank, pattern, i, j);
+            }
+        }
+    }
+
+    // Search diagonally (bottom-left to top-right)
+    for (int i = pattern_length - 1; i < rows; i++) {
+        for (int j = 0; j <= cols - pattern_length; j++) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i - k][j + k] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' diagonally (BL to TR) at position (%d, %d)\n", rank, pattern, i, j);
+            }
+        }
+    }
+
+    // Search diagonally (bottom-right to top-left)
+    for (int i = pattern_length - 1; i < rows; i++) {
+        for (int j = pattern_length - 1; j < cols; j++) {
+            int match = 1;
+            for (int k = 0; k < pattern_length; k++) {
+                if (matrix[i - k][j - k] != pattern[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                printf("Process %d found '%s' diagonally (BR to TL) at position (%d, %d)\n", rank, pattern, i, j);
+            }
         }
     }
 }
@@ -75,15 +159,16 @@ int main(int argc, char** argv) {
 
     if (argc != 3) {
         if (rank == 0) {
-            fprintf(stderr, "Usage: %s <strings_to_search.txt> <large_file.txt>\n", argv[0]);
+            fprintf(stderr, "Usage: %s <patterns_file.txt> <matrix_file.txt>\n", argv[0]);
         }
         MPI_Finalize();
         exit(1);
     }
 
     const char* search_file = argv[1];
-    const char* large_file = argv[2];
+    const char* matrix_file = argv[2];
 
+    // Start timer
     double start_time = MPI_Wtime();
 
     int num_patterns, max_pattern_length;
@@ -92,9 +177,11 @@ int main(int argc, char** argv) {
         patterns = load_strings(search_file, &num_patterns, &max_pattern_length);
     }
 
+    // Broadcast the number of patterns and max pattern length to all processes
     MPI_Bcast(&num_patterns, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&max_pattern_length, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    // Broadcast patterns to all processes
     if (rank != 0) {
         patterns = (char**)malloc(num_patterns * sizeof(char*));
         for (int i = 0; i < num_patterns; i++) {
@@ -105,66 +192,61 @@ int main(int argc, char** argv) {
         MPI_Bcast(patterns[i], MAX_STRING_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
     }
 
-    int continuous = 0;
-    if (rank == 0) {
-        continuous = is_continuous_file(large_file);
-    }
-    MPI_Bcast(&continuous, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    FILE* file = fopen(large_file, "r");
+    // Open the matrix file and load it into memory
+    FILE* file = fopen(matrix_file, "r");
     if (!file) {
-        fprintf(stderr, "Error: Could not open file %s\n", large_file);
+        fprintf(stderr, "Error: Could not open file %s\n", matrix_file);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
+    // Get the number of rows and columns in the matrix
+    int rows = 0, cols = 0;
+    char buffer[MAX_STRING_LENGTH];
+    while (fgets(buffer, MAX_STRING_LENGTH, file)) {
+        if (cols == 0) {
+            cols = strlen(buffer) - 1; // Remove newline character
+        }
+        rows++;
+    }
+    rewind(file);
 
-    long chunk_size = file_size / size;
-    long overlap = continuous ? (max_pattern_length - 1) : 0;
-    long start_offset = rank * chunk_size;
-    long end_offset = (rank == size - 1) ? file_size : start_offset + chunk_size;
+    // Allocate memory for the matrix
+    char** matrix = (char**)malloc(rows * sizeof(char*));
+    for (int i = 0; i < rows; i++) {
+        matrix[i] = (char*)malloc(cols * sizeof(char));
+    }
 
-    if (rank > 0 && continuous) start_offset -= overlap;
-    long buffer_size = end_offset - start_offset;
-
-    char* buffer = (char*)malloc(buffer_size + 1);
-    fseek(file, start_offset, SEEK_SET);
-    fread(buffer, 1, buffer_size, file);
-    buffer[buffer_size] = '\0';
+    // Read the matrix into memory
+    int row = 0;
+    while (fgets(buffer, MAX_STRING_LENGTH, file)) {
+        buffer[strcspn(buffer, "\r\n")] = 0; // Remove newline
+        strncpy(matrix[row], buffer, cols);
+        row++;
+    }
     fclose(file);
 
-
-    if (!continuous) {
-        for (long i = buffer_size - 1; i >= 0; i--) {
-            if (buffer[i] == '\n') {
-                buffer[i + 1] = '\0';
-                break;
-            }
-        }
-    }
-
-
+    // Each process searches for each pattern in the matrix
     for (int i = 0; i < num_patterns; i++) {
-        char* pattern = patterns[i];
-        int pattern_length = strlen(pattern);
-        quick_search(buffer, buffer_size, pattern, pattern_length, start_offset, rank);
+        search_in_matrix(matrix, rows, cols, patterns[i], strlen(patterns[i]), rank);
     }
 
-    free(buffer);
+    // Clean up
     for (int i = 0; i < num_patterns; i++) {
         free(patterns[i]);
     }
     free(patterns);
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    for (int i = 0; i < rows; i++) {
+        free(matrix[i]);
+    }
+    free(matrix);
 
-
-    MPI_Finalize();
+    // End timer and log total execution time
     double end_time = MPI_Wtime();
     if (rank == 0) {
         printf("Execution Time: %.6f seconds\n", end_time - start_time);
     }
+
+    MPI_Finalize();
     return 0;
 }
